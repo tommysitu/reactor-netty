@@ -17,6 +17,7 @@
 package reactor.ipc.netty.http.client;
 
 import java.io.InputStream;
+import java.net.InetSocketAddress;
 import java.net.URISyntaxException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
@@ -39,9 +40,10 @@ import io.netty.handler.ssl.SslContext;
 import io.netty.handler.ssl.SslContextBuilder;
 import io.netty.handler.ssl.util.SelfSignedCertificate;
 import io.netty.util.CharsetUtil;
-import org.junit.Assert;
-import org.junit.Ignore;
-import org.junit.Test;
+import io.specto.hoverfly.junit.core.HoverflyConfig;
+import io.specto.hoverfly.junit.core.SimulationSource;
+import io.specto.hoverfly.junit.rule.HoverflyRule;
+import org.junit.*;
 import reactor.core.publisher.DirectProcessor;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -54,6 +56,7 @@ import reactor.ipc.netty.resources.PoolResources;
 import reactor.ipc.netty.tcp.TcpServer;
 import reactor.test.StepVerifier;
 
+import static io.specto.hoverfly.junit.core.SimulationSource.classpath;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
@@ -61,6 +64,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  * @since 0.6
  */
 public class HttpClientTest {
+
+	@ClassRule
+	public static HoverflyRule hoverflyRule = HoverflyRule.inSimulationMode(classpath("test.json"), HoverflyConfig.configs().proxyPort(8500));
+
 
 	@Test
 	public void abort() throws Exception {
@@ -687,4 +694,44 @@ public class HttpClientTest {
 				.contains("1024 mark here -><- 1024 mark here")
 				.endsWith("End of File");
 	}
+
+	@Test
+	public void jsonTime() throws Exception {
+		Mono<HttpClientResponse> remote = HttpClient.create()
+				.get("http://time.jsontest.com",
+						c -> c.sendHeaders());
+
+		Mono<String> page = remote
+				.flatMapMany(r -> r.receive()
+						.retain()
+						.asString()
+						.limitRate(1))
+				.reduce(String::concat);
+
+		StepVerifier.create(page)
+				.expectNextMatches(s -> s.contains("milliseconds_since_epoch"))
+				.expectComplete()
+				.verify(Duration.ofSeconds(30));
+	}
+
+	@Test
+	public void hoverflyProxy() throws Exception {
+		Mono<HttpClientResponse> remote = HttpClient.create(o -> o.httpProxy(ops -> ops
+				.address(new InetSocketAddress("localhost", 8500))
+				))
+				.get("http://time.jsontest.com",
+						c -> c.sendHeaders());
+
+		Mono<String> page = remote
+				.flatMapMany(r -> r.receive()
+						.retain()
+						.asString()
+						.limitRate(1))
+				.reduce(String::concat);
+		StepVerifier.create(page)
+				.expectNextMatches(s -> s.contains("milliseconds_since_epoch"))
+				.expectComplete()
+				.verify(Duration.ofSeconds(30));
+	}
+
 }
